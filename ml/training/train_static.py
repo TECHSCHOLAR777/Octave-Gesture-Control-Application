@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 from pathlib import Path
@@ -246,8 +247,14 @@ def train_static_model(
     epochs: int = 60,
     lr: float = 0.001,
     batch_size: int = 32,
+    patience: int = 5,
     progress_cb: Callable[[float], None] | None = None,
 ) -> dict[str, Any]:
+    if epochs < 1:
+        raise ValueError("epochs must be at least 1.")
+    if patience < 1:
+        raise ValueError("patience must be at least 1.")
+
     warnings: list[str] = []
     if target == "custom":
         if not csv_path:
@@ -283,7 +290,15 @@ def train_static_model(
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     val_accuracy = 0.0
+    best_val_accuracy = -1.0
+    best_epoch = 0
+    epochs_trained = 0
+    epochs_without_improvement = 0
+    early_stopped = False
+    best_state_dict = copy.deepcopy(model.state_dict())
+
     for epoch in range(1, epochs + 1):
+        epochs_trained = epoch
         model.train()
         for batch_x, batch_y in train_loader:
             optimizer.zero_grad()
@@ -305,6 +320,22 @@ def train_static_model(
         if progress_cb is not None:
             progress_cb(epoch / float(max(1, epochs)))
 
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_epoch = epoch
+            epochs_without_improvement = 0
+            best_state_dict = copy.deepcopy(model.state_dict())
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= patience:
+            early_stopped = True
+            break
+
+    model.load_state_dict(best_state_dict)
+    if early_stopped and progress_cb is not None:
+        progress_cb(1.0)
+
     output_path = Path(model_path) if model_path else resolve_model_path(target)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), output_path)
@@ -317,8 +348,12 @@ def train_static_model(
         "samples": int(features.shape[0]),
         "train_samples": len(train_dataset),
         "validation_samples": len(val_dataset),
-        "accuracy": val_accuracy,
-        "val_accuracy": val_accuracy,
+        "accuracy": best_val_accuracy,
+        "val_accuracy": best_val_accuracy,
+        "best_epoch": best_epoch,
+        "epochs_trained": epochs_trained,
+        "early_stopped": early_stopped,
+        "patience": patience,
         "warnings": warnings,
     }
 
@@ -331,6 +366,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--lr", type=float, default=0.0007)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--patience", type=int, default=5)
     args = parser.parse_args()
 
     print(
@@ -341,6 +377,7 @@ def main() -> None:
             epochs=args.epochs,
             lr=args.lr,
             batch_size=args.batch_size,
+            patience=args.patience,
         )
     )
 

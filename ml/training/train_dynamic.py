@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 from pathlib import Path
@@ -219,7 +220,13 @@ def train_dynamic_model(
     epochs: int = 40,
     lr: float = 0.001,
     batch_size: int = 16,
+    patience: int = 5,
 ) -> dict[str, Any]:
+    if epochs < 1:
+        raise ValueError("epochs must be at least 1.")
+    if patience < 1:
+        raise ValueError("patience must be at least 1.")
+
     X, y, label_names, warnings = load_dynamic_dataset(target)
     num_classes = max(int(value) for value in y.tolist()) + 1
 
@@ -252,7 +259,16 @@ def train_dynamic_model(
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
+    val_accuracy = 0.0
+    best_val_accuracy = -1.0
+    best_epoch = 0
+    epochs_trained = 0
+    epochs_without_improvement = 0
+    early_stopped = False
+    best_state_dict = copy.deepcopy(model.state_dict())
+
     for epoch in range(1, epochs + 1):
+        epochs_trained = epoch
         model.train()
         epoch_loss = 0.0
         for batch_x, batch_y in train_loader:
@@ -281,6 +297,24 @@ def train_dynamic_model(
             flush=True,
         )
 
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_epoch = epoch
+            epochs_without_improvement = 0
+            best_state_dict = copy.deepcopy(model.state_dict())
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= patience:
+            early_stopped = True
+            print(
+                f"Early stopping at epoch {epoch}; best val_accuracy={best_val_accuracy:.4f} "
+                f"at epoch {best_epoch}",
+                flush=True,
+            )
+            break
+
+    model.load_state_dict(best_state_dict)
     model_path = resolve_model_path(target)
     torch.save(model.state_dict(), model_path)
     print(f"Saved dynamic model to {model_path}", flush=True)
@@ -292,7 +326,11 @@ def train_dynamic_model(
         "labels": label_names,
         "train_sequences": train_count,
         "validation_sequences": val_count,
-        "val_accuracy": val_accuracy,
+        "val_accuracy": best_val_accuracy,
+        "best_epoch": best_epoch,
+        "epochs_trained": epochs_trained,
+        "early_stopped": early_stopped,
+        "patience": patience,
         "warnings": warnings,
     }
 
@@ -303,6 +341,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=75)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--patience", type=int, default=5)
     args = parser.parse_args()
 
     result = train_dynamic_model(
@@ -310,6 +349,7 @@ def main() -> None:
         epochs=args.epochs,
         lr=args.lr,
         batch_size=args.batch_size,
+        patience=args.patience,
     )
     print(result)
 
