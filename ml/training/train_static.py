@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 from pathlib import Path
@@ -282,7 +283,12 @@ def train_static_model(
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
+    PATIENCE = 5
     val_accuracy = 0.0
+    best_val_accuracy = 0.0
+    best_state_dict = None
+    epochs_without_improvement = 0
+
     for epoch in range(1, epochs + 1):
         model.train()
         for batch_x, batch_y in train_loader:
@@ -302,8 +308,23 @@ def train_static_model(
                 total += int(val_y.size(0))
         val_accuracy = correct / max(1, total)
 
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_state_dict = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
         if progress_cb is not None:
             progress_cb(epoch / float(max(1, epochs)))
+
+        if epochs_without_improvement >= PATIENCE:
+            warnings.append(f"early_stopped_at_epoch_{epoch}")
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        val_accuracy = best_val_accuracy
 
     output_path = Path(model_path) if model_path else resolve_model_path(target)
     output_path.parent.mkdir(parents=True, exist_ok=True)
