@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 from pathlib import Path
@@ -252,6 +253,12 @@ def train_dynamic_model(
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
+    PATIENCE = 5
+    val_accuracy = 0.0
+    best_val_accuracy = 0.0
+    best_state_dict = None
+    epochs_without_improvement = 0
+
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0.0
@@ -280,6 +287,21 @@ def train_dynamic_model(
             f"Epoch {epoch}/{epochs} loss={epoch_loss:.4f} val_accuracy={val_accuracy:.4f}",
             flush=True,
         )
+
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_state_dict = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= PATIENCE:
+            warnings.append(f"early_stopped_at_epoch_{epoch}")
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        val_accuracy = best_val_accuracy
 
     model_path = resolve_model_path(target)
     torch.save(model.state_dict(), model_path)
